@@ -3,6 +3,7 @@ import cv2
 import mediapipe as mp
 import time
 import numpy as np
+from collections import deque
 
 # Initialize configuration
 webcam = 0
@@ -25,7 +26,7 @@ cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
 countdown_started = False
 countdown_time = 0
 countdown_value = 0
-finger_count_history = []
+finger_count_history = deque(maxlen=10)
 debounce_frames = 10
 cooldown_time = 0
 cooldown_duration = 3
@@ -33,7 +34,7 @@ cooldown_duration = 3
 # Variables for drawing
 drawing = False
 last_point = None
-current_color = (0, 0, 255)  # Default color is red
+current_color = (255, 255, 255)  # Default color is white
 
 # Create a blank canvas with the same size and type as the frame
 canvas = np.zeros((height, width, 3), dtype=np.uint8)
@@ -45,22 +46,20 @@ if not os.path.exists(screenshot_dir):
 
 # Load the header image
 folderPath = "Header"
-myList = os.listdir(folderPath)
-overlayList = []
-for imPath in myList:
-    image = cv2.imread(f"{folderPath}/{imPath}")
-    overlayList.append(image)
+overlayList = [
+    cv2.imread(f"{folderPath}/{imPath}") for imPath in os.listdir(folderPath)
+]
 header = overlayList[0]
 
 
 # Function to count extended fingers
 def count_fingers(hand_landmarks):
     finger_tips = [8, 12, 16, 20]
-    count = 0
-    for tip in finger_tips:
-        if hand_landmarks.landmark[tip].y < hand_landmarks.landmark[tip - 2].y:
-            count += 1
-    return count
+    return sum(
+        1
+        for tip in finger_tips
+        if hand_landmarks.landmark[tip].y < hand_landmarks.landmark[tip - 2].y
+    )
 
 
 # Countdown function
@@ -74,7 +73,7 @@ def start_countdown():
 # Function to capture and save a screenshot with canvas blended
 def capture_screenshot(frame):
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    filename = f"{screenshot_dir}/screenshot_{timestamp}.png"
+    filename = f"{screenshot_dir}/screenshot_{timestamp}.jpeg"
     cv2.imwrite(filename, frame)
     print(f"Screenshot saved as {filename}")
 
@@ -87,14 +86,13 @@ def draw_line(frame, start_point, end_point, color=(0, 0, 255), thickness=10):
 
 # Function to get landmark positions
 def get_landmark_positions(hand_landmarks):
-    positions = {}
-    for id, landmark in enumerate(hand_landmarks.landmark):
-        x, y = int(landmark.x * width), int(landmark.y * height)
-        positions[id] = (x, y)
-    return positions
+    return {
+        id: (int(landmark.x * width), int(landmark.y * height))
+        for id, landmark in enumerate(hand_landmarks.landmark)
+    }
 
 
-while True:
+while cap.isOpened():
     ret, frame = cap.read()
     if not ret:
         break
@@ -117,9 +115,7 @@ while True:
         landmark_drawing_spec = mp_draw.DrawingSpec(
             color=current_color, thickness=2, circle_radius=2
         )
-        connection_drawing_spec = mp_draw.DrawingSpec(
-            color=current_color, thickness=2, circle_radius=2
-        )
+        connection_drawing_spec = mp_draw.DrawingSpec(color=current_color, thickness=2)
 
         # Draw hand landmarks with the current color
         mp_draw.draw_landmarks(
@@ -135,17 +131,15 @@ while True:
 
         # Update finger count history
         finger_count_history.append(extended_fingers)
-        if len(finger_count_history) > debounce_frames:
-            finger_count_history.pop(0)
 
         # Track drawing
-        if extended_fingers == 1:
+        if extended_fingers == 1 and drawing:
             # Get the tip of the index finger
             index_tip = hand_landmarks.landmark[8]
-            index_tip_x, index_tip_y = int(index_tip.x * frame.shape[1]), int(
-                index_tip.y * frame.shape[0]
+            current_point = (
+                int(index_tip.x * frame.shape[1]),
+                int(index_tip.y * frame.shape[0]),
             )
-            current_point = (index_tip_x, index_tip_y)
 
             if last_point:
                 # Draw a line on the canvas and frame
@@ -156,7 +150,7 @@ while True:
         else:
             last_point = None  # Reset the last_point when no finger is extended
 
-        # Check if exactly four fingers are extended steadily for debounce_frames
+        # Check if exactly three fingers are extended steadily for debounce_frames
         if (
             finger_count_history.count(3) == debounce_frames
             and not countdown_started
@@ -168,25 +162,35 @@ while True:
         if finger_count_history.count(2) == debounce_frames:
             # Get landmark positions
             landmarks_positions = get_landmark_positions(hand_landmarks)
-
             x1, y1 = landmarks_positions[8]
 
             if y1 < 140:
                 if 300 <= x1 <= 400:
+                    # Green Color
+                    header = overlayList[1]
+                    drawing = True
                     current_color = (0, 255, 0)
-                    print("Blue Color")
                 elif 460 <= x1 <= 610:
+                    # Red Color
+                    header = overlayList[2]
+                    drawing = True
                     current_color = (0, 0, 255)
-                    print("Red Color")
                 elif 660 <= x1 <= 850:
+                    # Yellow Color
+                    header = overlayList[3]
+                    drawing = True
                     current_color = (0, 255, 255)
-                    print("Yellow Color")
                 elif 870 <= x1 <= 1050:
+                    # Eraser
+                    header = overlayList[4]
+                    drawing = True
                     current_color = (0, 0, 0)
-                    print("Eraser")
                 elif 1080 <= x1 <= 1250:
+                    # Clear
+                    header = overlayList[0]
+                    drawing = False
+                    current_color = (255, 255, 255)  # default color
                     canvas = np.zeros((height, width, 3), dtype=np.uint8)
-                    print("Clear")
 
     # Inverse the canvas for better drawing visibility
     imgGray = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
